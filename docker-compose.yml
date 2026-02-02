@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  # The PII Redaction App
+  pii-app:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # 1. Map the models folder so the app can see the downloaded AI model
+      - ./models:/app/models
+      # 2. (Optional) Map current dir to /app for live code updates without rebuilding
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DB_HOST=postgres-db
+      - DB_NAME=pii_guardrail
+      - DB_USER=admin
+      - DB_PASS=secret
+    depends_on:
+      - postgres-db
+
+  # The PostgreSQL Database
+  postgres-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: pii_guardrail
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # This loads our schema on first startup
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
