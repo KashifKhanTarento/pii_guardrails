@@ -1,18 +1,19 @@
 -- FILE: init.sql
 
 -- 1. Create the Table
+-- [CHANGE] Default is_active is now FALSE (Clean Slate Protocol)
 CREATE TABLE IF NOT EXISTS domain_policies (
     domain_id VARCHAR(50) PRIMARY KEY,
-    is_active BOOLEAN DEFAULT TRUE,
+    is_active BOOLEAN DEFAULT FALSE, 
     policy_json JSONB NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. SEED DATA (All 6 Domains)
+-- 2. SEED DATA (All 6 Domains - Inactive by Default)
 
 -- (A) EDUCATION DOMAIN
-INSERT INTO domain_policies (domain_id, policy_json) VALUES (
-    'education',
+INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
+    'education', FALSE,
     '{
         "meta": {"version": "1.0", "description": "Student & University Data"},
         "rules": [
@@ -25,8 +26,8 @@ INSERT INTO domain_policies (domain_id, policy_json) VALUES (
 );
 
 -- (B) FINANCE / BANKING DOMAIN
-INSERT INTO domain_policies (domain_id, policy_json) VALUES (
-    'finance',
+INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
+    'finance', FALSE,
     '{
         "meta": {"version": "1.0", "description": "Banking & PCI-DSS Compliance"},
         "rules": [
@@ -40,8 +41,8 @@ INSERT INTO domain_policies (domain_id, policy_json) VALUES (
 );
 
 -- (C) HEALTHCARE DOMAIN
-INSERT INTO domain_policies (domain_id, policy_json) VALUES (
-    'healthcare',
+INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
+    'healthcare', FALSE,
     '{
         "meta": {"version": "1.0", "description": "HIPAA & Patient Records"},
         "rules": [
@@ -54,8 +55,8 @@ INSERT INTO domain_policies (domain_id, policy_json) VALUES (
 );
 
 -- (D) GOVERNMENT / IDENTITY DOMAIN
-INSERT INTO domain_policies (domain_id, policy_json) VALUES (
-    'government',
+INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
+    'government', FALSE,
     '{
         "meta": {"version": "1.0", "description": "National ID & Citizen Data"},
         "rules": [
@@ -69,8 +70,8 @@ INSERT INTO domain_policies (domain_id, policy_json) VALUES (
 );
 
 -- (E) EMPLOYMENT / HR DOMAIN
-INSERT INTO domain_policies (domain_id, policy_json) VALUES (
-    'employment',
+INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
+    'employment', FALSE,
     '{
         "meta": {"version": "1.0", "description": "Internal Employee & Payroll Data"},
         "rules": [
@@ -83,8 +84,8 @@ INSERT INTO domain_policies (domain_id, policy_json) VALUES (
 );
 
 -- (F) DIGITAL / ONLINE PLATFORMS
-INSERT INTO domain_policies (domain_id, policy_json) VALUES (
-    'digital',
+INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
+    'digital', FALSE,
     '{
         "meta": {"version": "1.0", "description": "Credentials & Network Identifiers"},
         "rules": [
