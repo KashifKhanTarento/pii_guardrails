@@ -196,7 +196,9 @@ class DeployRequest(BaseModel):
     domain_id: str
     rules: List[Dict]
 
-# (Other Request Models omitted for brevity, logic remains same)
+class BulkActivateRequest(BaseModel):
+    domain_ids: List[str]
+
 class GenerateRegexRequest(BaseModel):
     example_text: str
 class NewDomainRequest(BaseModel):
@@ -219,7 +221,7 @@ def get_policy_config(domain: str):
 @app.post("/redact")
 def redact_text(request: RedactionRequest, x_tenant_id: str = Header(None)):
     global_start = time.time()
-    trace = []
+    trace = [] # Initialize trace immediately for safety
     
     # STEP 1: Authorization
     trace.append({
@@ -285,11 +287,11 @@ def redact_text(request: RedactionRequest, x_tenant_id: str = Header(None)):
             "original_text": request.text, 
             "redacted_text": redacted_text, 
             "pii_detected": entities,
-            "trace": trace, # <--- THE HYBRID TRACE OBJECT
+            "trace": trace,
             "metadata": {
                 "processing_time_ms": processing_time_ms,
                 "tenant_id": x_tenant_id,
-                "engine_version": "2.2.0 (Trace-Enabled)"
+                "engine_version": "2.3.0 (Bulk Activation)"
             }
         }
 
@@ -304,13 +306,13 @@ def redact_text(request: RedactionRequest, x_tenant_id: str = Header(None)):
         })
         raise HTTPException(status_code=500, detail="Guardrail Failure: Fail-Closed active.")
 
-# --- ADMIN ENDPOINTS (Same as before) ---
+# --- ADMIN ENDPOINTS ---
 
 @app.get("/admin/all-domains")
 def get_all_domains_admin():
     conn = policy_agent.get_db_connection()
     cur = conn.cursor(cursor_factory=RealDictCursor)
-    cur.execute("SELECT domain_id, is_active, policy_json->'meta'->>'description' as description FROM domain_policies;")
+    cur.execute("SELECT domain_id, is_active, policy_json->'meta'->>'description' as description FROM domain_policies ORDER BY domain_id;")
     rows = cur.fetchall()
     conn.close()
     return rows
@@ -327,6 +329,7 @@ def get_domain_config_admin(domain_id: str):
 
 @app.post("/admin/deploy")
 def deploy_domain(req: DeployRequest):
+    # [MODIFIED] This now only SAVES the rules. It does NOT enforce activation.
     conn = policy_agent.get_db_connection()
     cur = conn.cursor()
     try:
@@ -335,11 +338,37 @@ def deploy_domain(req: DeployRequest):
         if not row: raise HTTPException(status_code=404, detail="Domain not found")
         current_policy = row[0]
         current_policy['rules'] = req.rules
-        cur.execute("UPDATE domain_policies SET policy_json = %s, is_active = TRUE WHERE domain_id = %s", 
+        
+        # [CHANGE] Removed "is_active = TRUE"
+        cur.execute("UPDATE domain_policies SET policy_json = %s WHERE domain_id = %s", 
                     (json.dumps(current_policy), req.domain_id))
         conn.commit()
+        # We do NOT refresh policies here because activation state didn't change.
+        return {"status": "saved", "active_rules_count": len(req.rules)}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
+@app.post("/admin/activate-domains")
+def bulk_activate(req: BulkActivateRequest):
+    # [NEW] This handles the "Apply" logic.
+    conn = policy_agent.get_db_connection()
+    cur = conn.cursor()
+    try:
+        # 1. Reset ALL to False (Fail-Closed default)
+        cur.execute("UPDATE domain_policies SET is_active = FALSE")
+        
+        # 2. Activate ONLY the selected ones
+        if req.domain_ids:
+            cur.execute("UPDATE domain_policies SET is_active = TRUE WHERE domain_id = ANY(%s)", (req.domain_ids,))
+            
+        conn.commit()
+        
+        # 3. Refresh Cache immediately so Playground updates
         policy_agent.refresh_policies()
-        return {"status": "deployed", "active_rules_count": len(req.rules)}
+        return {"status": "success", "active_count": len(req.domain_ids)}
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -384,10 +413,10 @@ def create_domain(req: NewDomainRequest):
     conn = policy_agent.get_db_connection()
     cur = conn.cursor()
     try:
+        # Default is_active is FALSE in DB schema, so this is safe
         initial_policy = {"meta": {"version": "1.0", "description": req.description}, "rules": []}
         cur.execute("INSERT INTO domain_policies (domain_id, policy_json) VALUES (%s, %s)", (req.domain_id, json.dumps(initial_policy)))
         conn.commit()
-        policy_agent.refresh_policies()
         return {"status": "success"}
     except Exception as e:
         conn.rollback()
