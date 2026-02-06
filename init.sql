@@ -1,7 +1,6 @@
 -- FILE: init.sql
 
 -- 1. Create the Table
--- [CHANGE] Default is_active is now FALSE (Clean Slate Protocol)
 CREATE TABLE IF NOT EXISTS domain_policies (
     domain_id VARCHAR(50) PRIMARY KEY,
     is_active BOOLEAN DEFAULT FALSE, 
@@ -9,7 +8,7 @@ CREATE TABLE IF NOT EXISTS domain_policies (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. SEED DATA (All 6 Domains - Inactive by Default)
+-- 2. SEED DATA (All 6 Existing Domains - Preserved)
 
 -- (A) EDUCATION DOMAIN
 INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
@@ -23,7 +22,7 @@ INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
             { "entity_type": "PHONE", "action": "MASK", "config": {"visible_suffix_length": 2}, "custom_regex": "\\b(?:\\+?\\d{1,3}[\\s-]?)?\\d{10}\\b" }
         ]
     }'
-);
+) ON CONFLICT (domain_id) DO NOTHING;
 
 -- (B) FINANCE / BANKING DOMAIN
 INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
@@ -38,7 +37,7 @@ INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
             { "entity_type": "UPI_ID", "action": "HASH", "config": {"algorithm": "HMAC-SHA256"}, "custom_regex": "\\b[\\w.-]+@[\\w.-]+\\b" }
         ]
     }'
-);
+) ON CONFLICT (domain_id) DO NOTHING;
 
 -- (C) HEALTHCARE DOMAIN
 INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
@@ -52,7 +51,7 @@ INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
             { "entity_type": "AADHAAR_UID", "action": "MASK", "config": {"mask_char": "X", "visible_suffix_length": 4}, "custom_regex": "\\b\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b" }
         ]
     }'
-);
+) ON CONFLICT (domain_id) DO NOTHING;
 
 -- (D) GOVERNMENT / IDENTITY DOMAIN
 INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
@@ -67,7 +66,7 @@ INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
             { "entity_type": "RATION_CARD", "action": "MASK", "config": {"visible_suffix_length": 3}, "custom_regex": "\\b[A-Z]\\d{9}\\b" }
         ]
     }'
-);
+) ON CONFLICT (domain_id) DO NOTHING;
 
 -- (E) EMPLOYMENT / HR DOMAIN
 INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
@@ -81,7 +80,7 @@ INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
             { "entity_type": "BANK_ACCT", "action": "MASK", "config": {"visible_suffix_length": 4}, "custom_regex": "\\b\\d{9,18}\\b" }
         ]
     }'
-);
+) ON CONFLICT (domain_id) DO NOTHING;
 
 -- (F) DIGITAL / ONLINE PLATFORMS
 INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
@@ -96,4 +95,19 @@ INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
             { "entity_type": "PASSWORD", "action": "REDACT_TAG", "config": {"tag_label": "[PWD_REMOVED]"}, "custom_regex": "(?i)(password\\s*[:=]\\s*\\S+)" }
         ]
     }'
-);
+) ON CONFLICT (domain_id) DO NOTHING;
+
+-- [NEW] (G) LOGISTICS / ADDRESS DOMAIN
+-- This is essential for testing the "Hybrid v0.2.1" Logic (Suffixes & Glue)
+INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
+    'logistics', FALSE,
+    '{
+        "meta": {"version": "0.2.1", "description": "Shipping & Address Guardrail"},
+        "rules": [
+            { "entity_type": "PIN_CODE", "action": "REDACT_TAG", "config": {"tag_label": "[PIN]"} },
+            { "entity_type": "HOUSE_NUMBER", "action": "MASK", "config": {"visible_suffix_length": 0} },
+            { "entity_type": "LOCATION", "action": "REDACT_TAG", "config": {"tag_label": "[LOCATION]"} },
+            { "entity_type": "PHONE", "action": "HASH", "config": {} }
+        ]
+    }'
+) ON CONFLICT (domain_id) DO NOTHING;
