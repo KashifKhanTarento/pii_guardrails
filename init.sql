@@ -1,6 +1,6 @@
 -- FILE: init.sql
 
--- 1. Create the Table
+-- 1. Create the Policy Table
 CREATE TABLE IF NOT EXISTS domain_policies (
     domain_id VARCHAR(50) PRIMARY KEY,
     is_active BOOLEAN DEFAULT FALSE, 
@@ -8,7 +8,21 @@ CREATE TABLE IF NOT EXISTS domain_policies (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. SEED DATA (All 6 Existing Domains - Preserved)
+-- 2. Create the Audit Store (NEW for v0.2.3)
+-- This satisfies the "Evidence" requirement for RTI/Governance
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id SERIAL PRIMARY KEY,
+    trace_id UUID NOT NULL,
+    tenant_id VARCHAR(50),
+    domain_id VARCHAR(50),
+    target_context VARCHAR(20), -- 'user' or 'storage'
+    pii_count INT,
+    processing_ms INT,
+    trace_json JSONB NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 3. SEED DATA (Existing Domains)
 
 -- (A) EDUCATION DOMAIN
 INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
@@ -97,17 +111,17 @@ INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
     }'
 ) ON CONFLICT (domain_id) DO NOTHING;
 
--- [NEW] (G) LOGISTICS / ADDRESS DOMAIN
--- This is essential for testing the "Hybrid v0.2.1" Logic (Suffixes & Glue)
+-- (G) LOGISTICS / ADDRESS DOMAIN [UPDATED to v0.2.2]
 INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
     'logistics', FALSE,
     '{
-        "meta": {"version": "0.2.1", "description": "Shipping & Address Guardrail"},
+        "meta": {"version": "0.2.2", "description": "Specificity Address Guardrail"},
         "rules": [
             { "entity_type": "PIN_CODE", "action": "REDACT_TAG", "config": {"tag_label": "[PIN]"} },
             { "entity_type": "HOUSE_NUMBER", "action": "MASK", "config": {"visible_suffix_length": 0} },
-            { "entity_type": "LOCATION", "action": "REDACT_TAG", "config": {"tag_label": "[LOCATION]"} },
+            { "entity_type": "LOCATION", "action": "REDACT_TAG", "config": {"tag_label": "[REDACTED]"} },
             { "entity_type": "PHONE", "action": "HASH", "config": {} }
         ]
     }'
-) ON CONFLICT (domain_id) DO NOTHING;
+) ON CONFLICT (domain_id) DO UPDATE 
+SET policy_json = EXCLUDED.policy_json;

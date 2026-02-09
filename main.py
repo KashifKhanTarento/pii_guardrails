@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi import FastAPI, HTTPException, Request, Header, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -9,6 +9,7 @@ import logging
 import os
 import json
 import time
+import uuid
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import spacy
@@ -74,37 +75,69 @@ class PolicySyncAgent:
 
 policy_agent = PolicySyncAgent()
 
-# --- 2. DETECTION ENGINE (HYBRID v0.2.1) ---
+# --- 1.1 AUDIT LOGGER ---
+class AuditLogger:
+    def log_event(self, trace_id: str, tenant_id: str, domain: str, target: str, pii_count: int, processing_ms: int, trace: List):
+        try:
+            conn = policy_agent.get_db_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO audit_logs (trace_id, tenant_id, domain_id, target_context, pii_count, processing_ms, trace_json)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (trace_id, tenant_id, domain, target, pii_count, processing_ms, json.dumps(trace)))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"❌ AUDIT LOG FAILURE: {e}")
+
+audit_logger = AuditLogger()
+
+# --- 2. DETECTION ENGINE (v0.2.4 RISK MATRIX) ---
 class DetectedEntity(BaseModel):
     entity_type: str
     start_index: int
     end_index: int
     text_segment: str
     detection_source: str
+    risk_score: float = 0.0
 
 class DetectionEngine:
-    # [LAYER 1] Static Anchors & Regex
+    # [LAYER 1] High-Risk Anchors (Always PII)
     STATIC_PATTERNS = {
         "AADHAAR_UID": re.compile(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"),
         "PAN_CARD": re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b"),
         "PIN_CODE": re.compile(r"\b\d{3}\s?\d{3}\b"),
         "PHONE": re.compile(r"\b(\+91[\-\s]?)?[6-9]\d{9}\b"),
-        # Catches "No. 32", "Flat 404", "#12"
-        "HOUSE_NUMBER": re.compile(r"\b(No\.|Flat|House|H\.No|Door|#)\s?[\w\-/]+\b", re.IGNORECASE) 
+        "HOUSE_NUMBER": re.compile(r"\b(No\.|Flat|House|H\.No|Door|#|Plot|Tower|Wing|Floor)\s?[\w\-/]+\b", re.IGNORECASE) 
     }
 
-    # [LAYER 2] The Suffix Scout (Language Agnostic)
-    # Full list restored
+    # [LAYER 1.5] Quasi-Identifier Lists (Heuristic Context)
+    COMMON_OCCUPATIONS = {
+        "farmer", "driver", "teacher", "engineer", "doctor", "nurse", "worker", 
+        "laborer", "coolie", "maid", "guard", "police", "soldier", "clerk", "officer"
+    }
+    GENDER_TERMS = {"male", "female", "man", "woman", "boy", "girl", "transgender"}
+
+    # [LAYER 2] Suffix Indicators
     INDIAN_ADDRESS_SUFFIXES = [
-        # English/Universal
         "Road", "Street", "St", "Ave", "Lane", "Cross", "Main", "Block", "Layout", 
         "Nagar", "Poor", "Pur", "Pura", "Bad", "Colony", "Enclave", "Apartment", "Apt", 
         "Heights", "Villa", "Residency", "Park", "Gate", "Phase", "Sector",
-        # Hindi/Urdu
-        "Manzil", "Niwas", "Bhavan", "Nilaya", "Kuteer", "Marg", "Chowk", "Vihar",
-        # Kannada/South
+        "Manzil", "Niwas", "Bhavan", "Nilaya", "Kuteer", "Marg", "Chowk", "Vihar", 
         "Mane", "Halli", "Palaya", "Sandra", "Gutta", "Kere", "District", "Town", "Mandal"
     ]
+
+    # [LAYER 3] The "Safe List"
+    SAFE_GEO_TERMS = {
+        "bangalore", "bengaluru", "mumbai", "delhi", "chennai", "kolkata", "hyderabad", "pune", "ahmedabad", 
+        "jaipur", "surat", "lucknow", "kanpur", "nagpur", "indore", "thane", "bhopal", "visakhapatnam", 
+        "patna", "vadodara", "ghaziabad", "ludhiana", "agra", "nashik", "ranchi", "meerut", "rajkot",
+        "chittoor", "mysore", "mysuru", "hubli", "dharwad", "belgaum", "mangalore", "hassan", "hoskote",
+        "mulbagal", "madanapalli",
+        "karnataka", "maharashtra", "tamil nadu", "kerala", "andhra pradesh", "telangana", "uttar pradesh",
+        "delhi", "goa", "gujarat", "rajasthan", "punjab", "haryana", "bihar", "west bengal", "odisha",
+        "madhya pradesh", "india"
+    }
 
     def __init__(self):
         print("🧠 Loading NLP Model...")
@@ -115,57 +148,71 @@ class DetectionEngine:
             print(f"❌ Failed to load NLP Model: {e}")
             self.nlp = None
 
-    def detect(self, text: str, rules: List[Dict], trace_log: List):
+    def detect_quasi_identifiers(self, text: str) -> List[DetectedEntity]:
+        """Detects Age, Gender, Occupation for Risk Calculation"""
+        quasi_ents = []
+        
+        # 1. Age Regex (Simple)
+        for match in re.finditer(r"\b\d{1,3}\s*(?:years?|yrs?|old)\b", text, re.IGNORECASE):
+             quasi_ents.append(DetectedEntity(
+                entity_type="AGE", start_index=match.start(), end_index=match.end(), 
+                text_segment=match.group(), detection_source="REGEX: Age", risk_score=0.3
+            ))
+
+        # 2. Occupation & Gender (Keyword Match - Simple for Demo)
+        words = re.findall(r'\b\w+\b', text.lower())
+        for i, w in enumerate(words):
+            if w in self.COMMON_OCCUPATIONS:
+                 for m in re.finditer(rf"\b{w}\b", text, re.IGNORECASE):
+                     quasi_ents.append(DetectedEntity(
+                        entity_type="OCCUPATION", start_index=m.start(), end_index=m.end(),
+                        text_segment=m.group(), detection_source="KEYWORD: Occupation", risk_score=0.3
+                     ))
+            if w in self.GENDER_TERMS:
+                 for m in re.finditer(rf"\b{w}\b", text, re.IGNORECASE):
+                     quasi_ents.append(DetectedEntity(
+                        entity_type="GENDER", start_index=m.start(), end_index=m.end(),
+                        text_segment=m.group(), detection_source="KEYWORD: Gender", risk_score=0.2
+                     ))
+        return quasi_ents
+
+    def detect(self, text: str, rules: List[Dict], trace_log: List, strict_mode: bool = False):
         detected = []
         active_types = [r['entity_type'] for r in rules]
+        is_loc_active = any(x in active_types for x in ["LOCATION", "ADDRESS", "GPE"])
         
-        # --- PHASE 1: Regex Anchors (The Scout) ---
+        # --- PHASE 1: Regex Anchors (Risk 1.0) ---
         t0 = time.time()
-        regex_count = 0
-        
-        # 1a. Run configured rules (Custom + Static)
         for rule in rules:
             e_type = rule['entity_type']
             pattern = None
             source_label = "REGEX: Static"
             
-            # Robust Error Handling restored
             if "custom_regex" in rule and rule['custom_regex']:
                 try:
                     pattern = re.compile(rule['custom_regex'])
                     source_label = f"REGEX: Custom ({e_type})"
-                except re.error:
-                    print(f"❌ Bad Regex for {e_type}")
+                except re.error: pass 
             elif e_type in self.STATIC_PATTERNS:
                 pattern = self.STATIC_PATTERNS[e_type]
 
             if pattern:
                 for match in pattern.finditer(text):
-                    regex_count += 1
                     detected.append(DetectedEntity(
-                        entity_type=e_type, 
-                        start_index=match.start(), 
-                        end_index=match.end(), 
-                        text_segment=match.group(),
-                        detection_source=source_label
+                        entity_type=e_type, start_index=match.start(), end_index=match.end(), 
+                        text_segment=match.group(), detection_source=source_label, risk_score=1.0 
                     ))
 
-        # 1b. Run Hidden Anchors (House Numbers/PIN) if Location is active
-        is_location_active = any(x in active_types for x in ["LOCATION", "ADDRESS", "GPE"])
-        if is_location_active:
-            for anchor_type in ["HOUSE_NUMBER", "PIN_CODE"]:
-                pattern = self.STATIC_PATTERNS[anchor_type]
-                for match in pattern.finditer(text):
+        if is_loc_active:
+            for anchor in ["HOUSE_NUMBER", "PIN_CODE"]:
+                for match in self.STATIC_PATTERNS[anchor].finditer(text):
                     detected.append(DetectedEntity(
-                        entity_type="LOCATION", 
-                        start_index=match.start(),
-                        end_index=match.end(),
-                        text_segment=match.group(),
-                        detection_source=f"ANCHOR: {anchor_type}"
+                        entity_type="LOCATION", start_index=match.start(), end_index=match.end(), 
+                        text_segment=match.group(), detection_source=f"ANCHOR: {anchor}", risk_score=1.0
                     ))
 
-        # --- PHASE 2: Suffix Heuristics (The Scholar) ---
-        if is_location_active:
+        # --- PHASE 2: Suffix Heuristics (Risk 1.0) ---
+        if is_loc_active:
             words = text.split()
             cursor = 0
             for i, word in enumerate(words):
@@ -173,172 +220,119 @@ class DetectionEngine:
                 if clean_word in self.INDIAN_ADDRESS_SUFFIXES and i > 0:
                     prev_word = words[i-1]
                     if prev_word and prev_word[0].isupper():
-                        # Found "Gokul Mane" -> Redact both
                         start = text.find(prev_word, cursor)
                         if start != -1:
                             end = text.find(word, start) + len(word)
                             detected.append(DetectedEntity(
-                                entity_type="LOCATION",
-                                start_index=start,
-                                end_index=end,
-                                text_segment=text[start:end],
-                                detection_source=f"SUFFIX: {clean_word}"
+                                entity_type="LOCATION", start_index=start, end_index=end, text_segment=text[start:end],
+                                detection_source=f"SUFFIX: {clean_word}", risk_score=1.0
                             ))
                 cursor += len(word) + 1
 
         trace_log.append({
-            "step": "Static & Heuristic", 
-            "status": "Success", 
-            "time_ms": int((time.time()-t0)*1000),
-            "details": f"Ran anchors & suffix scan. Found {len(detected)} items."
+            "step": "Anchors & Suffixes", "status": "Success", 
+            "time_ms": int((time.time()-t0)*1000), "details": f"Found {len(detected)} high-risk anchors."
         })
 
-        # --- PHASE 3: AI Context (The Attention) ---
+        # --- PHASE 3: AI Specificity Filter (Risk 0.5 vs 1.0) ---
         t1 = time.time()
-        
-        # [RESTORED] Full Enterprise Mappings
-        AI_MAPPINGS = {
-            "PERSON": ["PERSON", "NAME", "STUDENT", "CLIENT", "PATIENT", "EMPLOYEE", "SUSPECT", "VICTIM"],
-            "GPE": ["LOCATION", "CITY", "COUNTRY", "STATE", "PLACE", "ORIGIN", "DESTINATION", "ADDRESS"],
-            "FAC": ["LOCATION", "BUILDING", "LANDMARK", "APARTMENT", "SOCIETY"], 
-            "LOC": ["LOCATION", "STREET", "AREA", "ADDRESS"], 
-            "ORG": ["ORG", "COMPANY", "BANK", "HOSPITAL", "AGENCY", "FIRM"]
-        }
-
-        # Optimization: Only run AI if relevant rules are active
-        all_keywords = [kw for valid_list in AI_MAPPINGS.values() for kw in valid_list]
-        needs_ai = any(kw in rule_name.upper() for rule_name in active_types for kw in all_keywords)
-        
-        ai_count = 0
-        if self.nlp and needs_ai:
+        ai_candidates = []
+        if self.nlp and is_loc_active:
             doc = self.nlp(text)
             for ent in doc.ents:
-                mapped_type = None
-                if ent.label_ in active_types:
-                    mapped_type = ent.label_
-                elif ent.label_ in AI_MAPPINGS:
-                    potential_keywords = AI_MAPPINGS[ent.label_]
-                    for rule_name in active_types:
-                        if any(kw in rule_name.upper() for kw in potential_keywords):
-                            mapped_type = rule_name
-                            break
-                
-                if mapped_type:
-                    ai_count += 1
-                    detected.append(DetectedEntity(
-                        entity_type=mapped_type,
-                        start_index=ent.start_char,
-                        end_index=ent.end_char,
-                        text_segment=ent.text,
-                        detection_source=f"AI: NER Model ({ent.label_} -> {mapped_type})"
+                if ent.label_ in ["GPE", "LOC", "FAC"]:
+                    is_safe = ent.text.lower() in self.SAFE_GEO_TERMS
+                    if strict_mode:
+                        detected.append(DetectedEntity(
+                            entity_type="LOCATION", start_index=ent.start_char, end_index=ent.end_char, 
+                            text_segment=ent.text, detection_source=f"AI: Strict ({ent.label_})", risk_score=1.0
+                        ))
+                    else:
+                        if not is_safe:
+                            ai_candidates.append(DetectedEntity(
+                                entity_type="LOCATION", start_index=ent.start_char, end_index=ent.end_char, 
+                                text_segment=ent.text, detection_source=f"AI: Candidate ({ent.label_})", risk_score=0.5
+                            ))
+                elif ent.label_ in active_types:
+                     detected.append(DetectedEntity(
+                        entity_type=ent.label_, start_index=ent.start_char, end_index=ent.end_char, 
+                        text_segment=ent.text, detection_source=f"AI: {ent.label_}", risk_score=1.0
                     ))
+
+        # --- PHASE 3.5: COMBINATION RISK CHECK (Type 2 Logic) ---
+        # Detect demographics (Age, Gender, Occupation)
+        quasi_ents = self.detect_quasi_identifiers(text)
         
-        trace_log.append({
-            "step": "AI Context Engine", 
-            "status": "Success" if self.nlp else "Skipped", 
-            "time_ms": int((time.time()-t1)*1000),
-            "details": f"Spacy Large Model invoked. Mapped {ai_count} entities."
-        })
+        # Calculate Risk Profile
+        # Rule: If we have (Candidate Location) + (Demographic PII), upgrade Candidates to High Risk
+        has_candidates = len(ai_candidates) > 0
+        has_demographics = len(quasi_ents) > 0
+        
+        # Also return demographic entities for frontend visibility (optional, but good for trace)
+        detected.extend(quasi_ents) 
 
-        # --- PHASE 4: Geometric Glue (The Bridge) ---
-        if is_location_active:
-            before_count = len(detected)
-            
-            # Step A: Run the Glue (Bridge two islands)
-            detected = self.apply_greedy_glue(detected, text)
-            
-            # [NEW] Step B: Run the Domino (Extend one island)
-            detected = self.apply_domino_effect(detected, text)
-            
-            if len(detected) != before_count:
-                trace_log.append({
-                    "step": "Geometric Glue & Domino", 
-                    "status": "Applied", 
-                    "time_ms": 1, 
-                    "details": "Merged clusters and extended chains (Address logic)"
-                })
-
+        if has_candidates and has_demographics and not strict_mode:
+            trace_log.append({
+                "step": "Combination Risk", "status": "High Risk", "time_ms": 1, 
+                "details": "Found Location + Demographics. Upgrading candidates."
+            })
+            # Upgrade ALL candidates to Risk 1.0
+            for c in ai_candidates:
+                c.risk_score = 1.0
+                c.detection_source = "RISK: Combination Upgrade"
+                detected.append(c)
+            ai_candidates = [] # Clear them since they are now in 'detected'
+        
+        # If not high risk, proceed with normal chaining
+        
+        # --- PHASE 4: Specificity Chain ---
+        if is_loc_active and not strict_mode:
+            detected = self.apply_specificity_chain(detected, ai_candidates, text)
+        
+        trace_log.append({"step": "AI & Context", "status": "Success", "time_ms": int((time.time()-t1)*1000)})
         return detected
 
-    def apply_greedy_glue(self, entities: List[DetectedEntity], text: str) -> List[DetectedEntity]:
-        if not entities: return []
-        
-        loc_entities = [e for e in entities if e.entity_type in ["LOCATION", "ADDRESS", "GPE", "FAC", "LOC"]]
-        other_entities = [e for e in entities if e not in loc_entities]
-        
-        if not loc_entities: return entities
+    def apply_specificity_chain(self, anchors: List[DetectedEntity], candidates: List[DetectedEntity], text: str) -> List[DetectedEntity]:
+        final_set = anchors.copy()
+        all_items = sorted(anchors + candidates, key=lambda x: x.start_index)
+        if not all_items: return final_set
 
-        # Sort by position
-        sorted_ents = sorted(loc_entities, key=lambda x: x.start_index)
-        merged = []
-        
-        current = sorted_ents[0]
-        
-        for next_ent in sorted_ents[1:]:
-            # DISTANCE THRESHOLD: 40 characters (approx 6-8 words)
-            gap = next_ent.start_index - current.end_index
-            
-            if gap < 40 and gap > 0: 
-                gap_text = text[current.end_index : next_ent.start_index]
-                # Heuristic: If gap has <= 5 words, assume it's part of the address
-                if len(gap_text.split()) <= 5: 
-                    current = DetectedEntity(
-                        entity_type="LOCATION", 
-                        start_index=current.start_index,
-                        end_index=next_ent.end_index,
-                        text_segment=text[current.start_index : next_ent.end_index],
-                        detection_source="GEOMETRY: Proximity Bridge"
-                    )
-                else:
-                    merged.append(current)
-                    current = next_ent
-            else:
-                merged.append(current)
-                current = next_ent
-        
-        merged.append(current)
-        return merged + other_entities
+        for i in range(1, len(all_items)):
+            current = all_items[i]
+            prev = all_items[i-1]
+            if current.risk_score == 1.0: continue
 
-    def apply_domino_effect(self, entities: List[DetectedEntity], text: str) -> List[DetectedEntity]:
-        # [NEW LOGIC] Fixes "Madanapalli, Chittoor" by chaining location islands
-        loc_entities = [e for e in entities if e.entity_type in ["LOCATION", "ADDRESS", "GPE"]]
-        if not loc_entities: return entities
+            gap = current.start_index - prev.end_index
+            if gap < 10 and gap >= 0 and prev.risk_score == 1.0:
+                 gap_text = text[prev.end_index : current.start_index]
+                 if re.match(r'^\s*(,|at|in|on)?\s*$', gap_text, re.IGNORECASE):
+                     current.risk_score = 1.0 
+                     current.detection_source = "CHAIN: Extended"
+                     final_set.append(current)
         
-        new_additions = []
-        
-        for ent in loc_entities:
-            # Look ahead in the text from the end of the current entity
+        final_set = self.run_text_domino(final_set, text)
+        return final_set
+
+    def run_text_domino(self, entities: List[DetectedEntity], text: str) -> List[DetectedEntity]:
+        locs = [e for e in entities if e.entity_type == "LOCATION"]
+        new_items = []
+        for ent in locs:
             cursor = ent.end_index
-            
-            # Loop to catch chains like "City, District, State"
             while cursor < len(text):
-                # Regex: Look for comma/space followed immediately by a Proper Noun
-                # matches: ", Chittoor" or " Chittoor"
                 match = re.match(r'^\s*(,|and)?\s*([A-Z][a-z]+)', text[cursor:])
-                
                 if match:
-                    word = match.group(2)
-                    # Safety Check: Don't redact common verbs/words if they accidentally get capitalized
-                    if word.lower() in ["and", "but", "the", "is", "at", "in"]: 
-                        break
-                        
-                    # Create new entity for the extension
-                    full_match_len = len(match.group(0))
-                    new_ent = DetectedEntity(
-                        entity_type="LOCATION",
-                        start_index=cursor,
-                        end_index=cursor + full_match_len,
-                        text_segment=match.group(0),
-                        detection_source="GEOMETRY: Domino Extension"
-                    )
-                    new_additions.append(new_ent)
-                    
-                    # Advance cursor to keep looking for the NEXT part of the chain
-                    cursor += full_match_len
+                    word = match.group(2).lower()
+                    if word in self.SAFE_GEO_TERMS: break 
+                    if word in ["and", "but", "the", "is", "at", "in"]: break
+                    full_len = len(match.group(0))
+                    new_items.append(DetectedEntity(
+                        entity_type="LOCATION", start_index=cursor, end_index=cursor+full_len, text_segment=match.group(0),
+                        detection_source="CHAIN: Domino", risk_score=1.0
+                    ))
+                    cursor += full_len
                 else:
-                    break # Chain broken
-        
-        return entities + new_additions
+                    break
+        return entities + new_items
 
 detection_engine = DetectionEngine()
 
@@ -374,16 +368,19 @@ def get_policy_config(domain: str):
     return policy_agent.get_policy(domain) or {}
 
 @app.post("/redact")
-def redact_text(request: RedactionRequest, x_tenant_id: str = Header(None)):
+def redact_text(request: RedactionRequest, background_tasks: BackgroundTasks, x_tenant_id: str = Header(None), x_target: str = Header("user")):
     global_start = time.time()
-    trace = [] # Initialize trace immediately for safety
+    trace_id = str(uuid.uuid4())
+    trace = [] 
     
-    # STEP 1: Authorization
+    # PRODUCT ALIGNMENT: x-target determines Strictness
+    is_strict = (x_target.lower() != "user")
+    
     trace.append({
         "step": "Request Authorization",
         "status": "Success",
         "time_ms": 1,
-        "details": f"Tenant ID: {x_tenant_id or 'Anonymous'}. Engine v0.2.1 Hybrid."
+        "details": f"Tenant: {x_tenant_id}. Target: {x_target} (Strict={is_strict}). TraceID: {trace_id}"
     })
 
     policy = policy_agent.get_policy(request.domain)
@@ -392,17 +389,22 @@ def redact_text(request: RedactionRequest, x_tenant_id: str = Header(None)):
         raise HTTPException(status_code=400, detail="Invalid or Inactive Domain")
     
     try:
-        # STEP 2: Detection
-        entities = detection_engine.detect(request.text, policy['rules'], trace)
+        # STEP 2: Detection (Pass Strict Flag)
+        entities = detection_engine.detect(request.text, policy['rules'], trace, strict_mode=is_strict)
         
         # STEP 3: Redaction Execution
         t_redact = time.time()
         redacted_text = request.text
+        sorted_ents = sorted(entities, key=lambda x: x.start_index, reverse=True)
         
-        for entity in sorted(entities, key=lambda x: x.start_index, reverse=True):
+        for entity in sorted_ents:
+            # Dynamic Rule Injection for Quasi-Identifiers if High Risk
+            # If the entity is AGE/OCCUPATION/GENDER and we don't have a rule, we ignore it (unless strict?)
+            # But the MAIN GOAL is to redact the LOCATION candidates that were upgraded.
+            
             rule = next((r for r in policy['rules'] if r['entity_type'] == entity.entity_type), None)
             
-            # Fallback: If "Geometric Bridge" created a generic LOCATION, use any available Location rule
+            # Fallback for generic LOCATION
             if not rule and entity.entity_type == "LOCATION":
                  rule = next((r for r in policy['rules'] if r['entity_type'] in ["LOCATION", "GPE", "ADDRESS"]), None)
             
@@ -413,6 +415,8 @@ def redact_text(request: RedactionRequest, x_tenant_id: str = Header(None)):
                 replacement = rule['config'].get('tag_label', f'[{entity.entity_type}]')
             elif rule['action'] == "MASK":
                 visible = rule['config'].get('visible_suffix_length', 0)
+                if is_strict: visible = 0 # STRICT MODE OVERRIDE
+                
                 raw = entity.text_segment
                 if visible > 0 and len(raw) > visible:
                     replacement = "X" * (len(raw) - visible) + raw[-visible:]
@@ -421,17 +425,22 @@ def redact_text(request: RedactionRequest, x_tenant_id: str = Header(None)):
             elif rule['action'] == "HASH":
                 replacement = hmac.new(b"secret", entity.text_segment.encode(), hashlib.sha256).hexdigest()[:10] + "..."
 
-            # Apply replacement
             redacted_text = redacted_text[:entity.start_index] + replacement + redacted_text[entity.end_index:]
         
         trace.append({
             "step": "Policy Enforcement",
             "status": "Success",
             "time_ms": int((time.time() - t_redact) * 1000),
-            "details": f"Applied actions to {len(entities)} detected segments."
+            "details": f"Applied actions to {len(entities)} segments."
         })
 
         processing_time_ms = int((time.time() - global_start) * 1000)
+
+        # STEP 4: Async Audit Logging
+        background_tasks.add_task(
+            audit_logger.log_event, 
+            trace_id, x_tenant_id, request.domain, x_target, len(entities), processing_time_ms, trace
+        )
 
         return {
             "original_text": request.text, 
@@ -441,7 +450,8 @@ def redact_text(request: RedactionRequest, x_tenant_id: str = Header(None)):
             "metadata": {
                 "processing_time_ms": processing_time_ms,
                 "tenant_id": x_tenant_id,
-                "engine_version": "v0.2.1 Hybrid"
+                "trace_id": trace_id,
+                "target": x_target
             }
         }
 
@@ -455,8 +465,7 @@ def redact_text(request: RedactionRequest, x_tenant_id: str = Header(None)):
         })
         raise HTTPException(status_code=500, detail="Guardrail Failure: Fail-Closed active.")
 
-# --- ADMIN ENDPOINTS ---
-
+# --- ADMIN ENDPOINTS (Unchanged) ---
 @app.get("/admin/all-domains")
 def get_all_domains_admin():
     conn = policy_agent.get_db_connection()
@@ -478,50 +487,37 @@ def get_domain_config_admin(domain_id: str):
 
 @app.post("/admin/deploy")
 def deploy_domain(req: DeployRequest):
-    # Only SAVES the rules. Does NOT enforce activation.
     conn = policy_agent.get_db_connection()
     cur = conn.cursor()
     try:
         cur.execute("SELECT policy_json FROM domain_policies WHERE domain_id = %s", (req.domain_id,))
         row = cur.fetchone()
         if not row: raise HTTPException(status_code=404, detail="Domain not found")
-        
         current_policy = row[0]
         current_policy['rules'] = req.rules
-        
-        cur.execute("UPDATE domain_policies SET policy_json = %s WHERE domain_id = %s", 
-                    (json.dumps(current_policy), req.domain_id))
+        cur.execute("UPDATE domain_policies SET policy_json = %s WHERE domain_id = %s", (json.dumps(current_policy), req.domain_id))
         conn.commit()
         return {"status": "saved", "active_rules_count": len(req.rules)}
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
+    finally: conn.close()
 
 @app.post("/admin/activate-domains")
 def bulk_activate(req: BulkActivateRequest):
-    # The "Apply" Logic
     conn = policy_agent.get_db_connection()
     cur = conn.cursor()
     try:
-        # 1. Reset ALL to False
         cur.execute("UPDATE domain_policies SET is_active = FALSE")
-        
-        # 2. Activate ONLY the selected ones
         if req.domain_ids:
             cur.execute("UPDATE domain_policies SET is_active = TRUE WHERE domain_id = ANY(%s)", (req.domain_ids,))
-            
         conn.commit()
-        
-        # 3. Refresh Cache immediately
         policy_agent.refresh_policies()
         return {"status": "success", "active_count": len(req.domain_ids)}
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        conn.close()
+    finally: conn.close()
 
 def build_regex_from_structure(text: str) -> str:
     if not text: return ""
@@ -552,7 +548,7 @@ def generate_regex(req: GenerateRegexRequest):
     try:
         regex = build_regex_from_structure(req.example_text)
         try: re.compile(regex)
-        except re.error: raise HTTPException(status_code=500, detail="Generated pattern was invalid.")
+        except: raise HTTPException(status_code=500, detail="Generated pattern was invalid.")
         return {"regex": regex}
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
 
@@ -568,5 +564,4 @@ def create_domain(req: NewDomainRequest):
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        conn.close()
+    finally: conn.close()

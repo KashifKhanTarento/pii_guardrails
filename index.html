@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI4I PII Guardrail v0.2.1</title>
+    <title>AI4I PII Guardrail v0.2.3 Control Plane</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #f4f6f9; padding-top: 20px; font-family: 'Segoe UI', sans-serif; }
@@ -42,7 +42,7 @@
     <div class="d-flex justify-content-between align-items-center my-4">
         <div>
             <h3 class="fw-bold text-dark mb-0">🛡️ AI4I PII Guardrail</h3>
-            <span class="badge bg-primary rounded-pill px-3 py-1">v0.2.1 Hybrid Engine</span>
+            <span class="badge bg-primary rounded-pill px-3 py-1">v0.2.3 Context-Aware</span>
         </div>
         <div class="form-check form-switch">
             <input class="form-check-input" type="checkbox" id="traceToggle" checked>
@@ -61,8 +61,16 @@
                 <div class="col-lg-4">
                     <div class="section-card">
                         <div class="section-title">1. Configuration</div>
+                        
                         <label class="small fw-bold mb-1">Select Domain</label>
                         <select class="form-select mb-3" id="domainSelect"></select>
+                        
+                        <label class="small fw-bold mb-1 text-primary">Enforcement Target</label>
+                        <select class="form-select mb-3 border-primary" id="targetSelect">
+                            <option value="user" selected>👤 User Response (UX-First)</option>
+                            <option value="storage">💾 Storage / Logs (Strict Mode)</option>
+                        </select>
+
                         <label class="small fw-bold mb-1">Active Rules</label>
                         <div class="rule-list text-muted small" id="policyList">Select a domain...</div>
                     </div>
@@ -83,7 +91,7 @@
                         </div>
                     </div>
                     <div class="section-card">
-                         <div class="section-title">4. Audit Log (JSON)</div>
+                         <div class="section-title">4. Evidence (Audit Store)</div>
                          <pre id="jsonOutput" class="bg-dark text-success p-3 rounded small" style="max-height: 300px; overflow: auto; font-family: 'Consolas', monospace;">{}</pre>
                     </div>
                 </div>
@@ -187,7 +195,9 @@
     async function runRedaction() {
         const text = document.getElementById('inputText').value;
         const domain = document.getElementById('domainSelect').value;
+        const target = document.getElementById('targetSelect').value; // GET TARGET
         const showTrace = document.getElementById('traceToggle').checked;
+        
         if (!domain) return alert("Activate a domain first.");
         
         document.getElementById('outputText').innerText = "Processing...";
@@ -199,7 +209,12 @@
         try {
             const res = await fetch('/redact', {
                 method: 'POST',
-                headers: {'Content-Type': 'application/json', 'X-Tenant-ID': 'bhashini-demo'},
+                // SEND HEADERS: Includes X-Target for Context Awareness
+                headers: {
+                    'Content-Type': 'application/json', 
+                    'X-Tenant-ID': 'bhashini-demo',
+                    'X-Target': target 
+                },
                 body: JSON.stringify({text, domain})
             });
             const data = await res.json();
