@@ -1,4 +1,4 @@
-# 📘 AI4I PII Guardrail (v2.2 Enterprise Trace)
+# 📘 AI4I PII Guardrail (v0.3 Multi-Lingual & Context)
 
 **Technical Handover & System Architecture Documentation**
 
@@ -6,10 +6,11 @@
 
 The **AI4I PII Guardrail** is a microservice designed to act as a privacy firewall. It sits between client applications and downstream services, intercepting unstructured text to identify and redact Personally Identifiable Information (PII) in real-time.
 
-**v2.2 Update Highlights:**
-* **Live Orchestration Trace:** A real-time, millisecond-accurate activity log that visualizes the "Fail-Closed" decision process, providing complete observability.
-* **Clean Slate Protocol:** All domains start inactive. Admins must explicitly "Configure & Deploy" policies, ensuring no default rules are applied without oversight.
-* **Generic AI Mapping:** A zero-touch logic layer that automatically maps Spacy NER entities (like `PERSON`) to custom business rules (e.g., `CLIENT_NAME`, `WITNESS_NAME`) without code changes.
+**v3.0 Update Highlights:**
+* **Dual-Engine Intelligence:** Seamlessly switches between **English** (`en_core_web_lg`) and **Hindi** (`xx_ent_wiki_sm`) based on request headers.
+* **Context-Aware Strict Mode:** Implements a "User vs. Storage" logic. "User Mode" allows safe geographical terms (e.g., *Hoskote*) for chat utility, while "Storage Mode" forcibly redacts them for zero-trust compliance.
+* **Smart Redaction:** Features email-aware masking (`j**@gmail.com`), phone hashing (HMAC), and demographic risk escalation (e.g., *Farmer* + *Location* = High Risk).
+* **Live Orchestration Trace:** Continues to provide millisecond-accurate activity logs for "Fail-Closed" observability.
 
 ---
 
@@ -17,31 +18,46 @@ The **AI4I PII Guardrail** is a microservice designed to act as a privacy firewa
 
 ### 2.1 High-Level Component Diagram
 
-The system is containerized using Docker Compose and consists of three primary services.
+The system now features a branching logic flow based on Language and Target context.
 
 ```mermaid
 graph TD
     User[Client Application] -->|1. POST /redact| App[FastAPI Application]
     
-    subgraph "Docker Network"
-        App -->|2. Sync Policy| DB[(PostgreSQL 15)]
+    subgraph "Orchestration Core"
+        App -->|Header: X-Language| LangSwitch{Language?}
         
-        subgraph "Orchestration Core"
-            App -->|3a. Deterministic Engine| PyLogic[Regex & Logic Layer]
-            App -->|3b. Context Engine| Spacy[Spacy Large NER]
-            App -->|3c. Trace Recorder| Trace[Execution Logger]
-        end
+        LangSwitch -->|en| Eng[English Engine<br/>Spacy Large]
+        LangSwitch -->|hi| Hin[Hindi Engine<br/>Spacy Multi + Regex]
+        
+        Eng --> Anchors[Regex Anchors]
+        Hin --> Anchors
+        
+        Anchors --> Context[AI Context Analysis]
+        
+        Context --> Strict{Strict Mode?}
+        Strict -->|Yes| Block[Blocklist Scan<br/>Redact All Locs]
+        Strict -->|No| Allow[Safety Check<br/>Allow Safe Locs]
+        
+        Block --> Redact[Smart Redaction]
+        Allow --> Redact
     end
     
-    App -->|4. JSON + Trace Metadata| User
+    subgraph "Data & Logs"
+        App -->|Sync Policy| DB[(PostgreSQL 15)]
+        Redact -->|Log Trace| DB
+    end
+    
+    Redact -->|JSON + Trace| App
+    App -->|Response| User
 
 ```
 
 ### 2.2 Key Directories
 
-* `models/`: Stores the local `llama-3.2-3b-instruct.Q4_K_M.gguf` (optional) and Spacy vectors.
-* `main.py`: Core logic containing the `DetectionEngine`, `PolicySyncAgent`, and Trace instrumentation.
-* `init.sql`: Database schema (Default `is_active = FALSE`).
+* `models/`: Stores local Spacy vectors (`en_core_web_lg`, `xx_ent_wiki_sm`) and optional LLM weights.
+* `main.py`: Core logic containing the `DetectionEngine` (Dual-Language), `AuditLogger`, and API routes.
+* `init.sql`: Database schema and seeded templates (including the new `demo_all` and `logistics_hindi`).
 * `index.html`: Admin Console & Playground with "Waterfall" Trace UI.
 
 ---
@@ -53,51 +69,46 @@ graph TD
 The system uses a **"Select-to-Deploy"** philosophy.
 
 * **Table:** `domain_policies`
-* **Default State:** `is_active = FALSE`. No domains are live on startup.
+* **Default State:** `is_active = FALSE`.
 
 | Column | Description |
 | --- | --- |
-| `domain_id` | Unique identifier (e.g., 'finance', 'legal'). |
+| `domain_id` | Unique identifier (e.g., `demo_all`, `logistics_hindi`). |
 | `policy_json` | JSON blob storing the active rule configuration. |
 | `is_active` | Boolean flag. Controlled via the `/admin/deploy` endpoint. |
 
-### 3.2 Deployment Workflow
+### 3.2 Available Templates (v3.0)
 
-1. **Select Template:** Admin picks a domain (e.g., Education) from the sidebar.
-2. **Configure Rules:** Admin toggles specific rules (e.g., enable `STUDENT_ID`, disable `EMAIL`) and adds custom regex rules.
-3. **Deploy:** The system saves the specific configuration and sets `is_active = TRUE`.
+1. **`demo_all` (Super Domain):** Activates ALL capabilities (Credit Cards, Hindi, English, Email Masking).
+2. **`logistics`:** Optimized for English addresses and phone numbers.
+3. **`logistics_hindi`:** Specialized for Devanagari addresses (e.g., "टावर सी", "मकान नंबर").
+4. **`finance`:** Banking focus (PAN, IFSC, Cards).
 
 ---
 
 ## 4. Logic & Algorithms
 
-### 4.1 Hybrid Detection Engine
+### 4.1 Dual-Engine Detection
 
-1. **Deterministic Regex:**
-* Runs first for high-speed pattern matching (e.g., IDs, Phones).
-* **Builder:** Includes a mathematical regex generator for custom IDs.
+* **English:** Uses a 500MB Large model for deep syntactic understanding of Western address formats.
+* **Hindi:** Uses a lightweight Multi-lingual model combined with a **Custom Regex Layer** to handle alphanumerics (e.g., "Tower C") and agglutinative suffixes (e.g., "Me", "Par").
 
+### 4.2 Strict Mode & Risk Escalation
 
-2. **Generic AI Keyword Mapping (Smart Context):**
-* **Problem:** Hardcoding `PERSON` -> `STUDENT_NAME` is not scalable.
-* **Solution:** The system dynamically maps Spacy labels to active rules using keyword association.
-* **Logic:** If Spacy finds a `PERSON` and an active rule contains "NAME", "CLIENT", "VICTIM", etc., it automatically links them.
+* **Behavior:** Controlled via `X-Target` header.
+* **User Mode:** Whitelists known "Safe Cities" to maintain conversation flow.
+* **Storage Mode:** Inverts the logic—Safe Cities become a **Blocklist**.
+* **Combination Risk:** If a Quasi-Identifier (e.g., "Farmer", "Doctor") is detected, the system automatically escalates "Safe" locations to "High Risk" to prevent re-identification (k-anonymity).
 
+### 4.3 The "Trace Protocol"
 
-
-### 4.2 The "Trace Protocol"
-
-To prove "Fail-Closed" security without slowing down production, the system uses a **Post-Execution Trace**:
-
-1. The backend measures execution time of every module (Auth, Sync, Regex, AI) in real-time.
-2. It constructs a `trace` JSON array attached to the response.
-3. The Frontend "replays" this trace visually to simulate the orchestration flow for auditors.
+The backend constructs a `trace` JSON array attached to every response, visualizing the decision path (e.g., "Why was 'Mysore' redacted? -> Strict Mode Blocklist").
 
 ---
 
 ## 5. Deployment Guide
 
-### 5.1 Installation (WSL/Linux)
+### 5.1 Installation
 
 1. **Clone & Setup**:
 ```bash
@@ -107,9 +118,8 @@ cd PII_G
 ```
 
 
-2. **Install Model**:
-Download `llama-3.2-3b-instruct.Q4_K_M.gguf` into the `models/` folder.
-3. **Build & Run**:
+2. **Build & Run (Auto-Provisioning)**:
+The Dockerfile now handles multi-language model downloads automatically.
 ```bash
 docker-compose up --build
 
@@ -119,12 +129,12 @@ docker-compose up --build
 
 ### 5.2 Resetting the Database
 
-Since v2.2 uses persistent volumes, use this to trigger a "Fresh Install" (Clean Slate):
+To wipe old policies and load the new `demo_all` and Hindi templates:
 
 ```bash
 docker-compose down
 docker volume rm pii_g_postgres_data
-docker-compose up --build
+docker-compose up --build -d
 
 ```
 
@@ -134,56 +144,56 @@ docker-compose up --build
 
 ### 6.1 Core Endpoint: `/redact`
 
-Returns both the sanitized text and the execution trace.
+**Headers:**
 
-**Response Structure:**
+* `X-Language`: `en` (default) or `hi`.
+* `X-Target`: `user` (allow safe terms) or `storage` (strict redaction).
+
+**Request:**
 
 ```json
 {
-  "redacted_text": "Student name is [REDACTED]...",
+  "text": "My name is Rahul. I live in Tower C, Meadows.",
+  "domain": "demo_all"
+}
+
+```
+
+**Response:**
+
+```json
+{
+  "redacted_text": "My name is [NAME]. I live in [HOUSE], [LOC].",
   "trace": [
     {
-      "step": "Policy Synchronization",
+      "step": "Anchors (en)",
       "status": "Success",
-      "time_ms": 2,
-      "details": "Loaded 4 active rules for domain 'education'."
+      "details": "Found 1 high-risk anchors."
     },
     {
-      "step": "AI Context Engine",
+      "step": "AI & Context (en)",
       "status": "Success",
-      "time_ms": 15,
-      "details": "Spacy Large Model invoked. Mapped 1 entities."
+      "details": "Applied actions to 2 segments."
     }
   ],
-  "metadata": { "processing_time_ms": 22 }
+  "metadata": { "language": "en", "processing_time_ms": 12 }
 }
 
 ```
 
 ### 6.2 Admin Endpoints
 
-* `GET /admin/all-domains`: Lists all templates (active & inactive).
-* `GET /admin/domain-config/{id}`: Fetches rule configuration for editing.
-* `POST /admin/deploy`: **Critical.** Saves the selected rule subset and activates the domain.
-* `POST /admin/generate-regex`: Uses logic to build regex from examples.
+* `POST /admin/deploy`: Activates a domain template.
+* `POST /admin/activate-domains`: Bulk activation for testing.
+* `POST /admin/generate-regex`: AI-assisted regex generation.
 
 ---
 
-## 7. Frontend Features (v2.2)
+## 7. Frontend Features
 
-The UI is divided into two panes:
-
-1. **Playground (Live Audit):**
-* **Trace Panel:** A right-hand "Activity Log" that animates the request lifecycle (Waterfall view).
-* **Drill-Down:** Clicking a trace step reveals raw debug data (regex patterns matched, AI labels found).
-* **Latency Badges:** Displays real backend processing time vs. animation time.
-
-
-2. **Policy Manager:**
-* **Checklist Interface:** Allows Admins to toggle specific rules within a domain.
-* **Custom Rule Builder:** Integrated regex generator for adding bespoke entities.
-
-
+1. **Playground:** Now supports toggling **Language** and **Enforcement Target** (Strict/User) directly from the UI.
+2. **Trace Panel:** Visualizes the specific engine (Hindi/English) used for the request.
+3. **Policy Manager:** deploying `demo_all` instantly enables a full-spectrum test environment.
 
 ---
 
@@ -191,9 +201,9 @@ The UI is divided into two panes:
 
 | Issue | Solution |
 | --- | --- |
-| **Playground Dropdown Empty** | This is by design (Clean Slate). Go to **Policy Manager** and deploy a domain first. |
-| **AI Not Detecting Names** | Ensure your custom rule name contains a keyword like "NAME", "PERSON", "CLIENT" so the Generic Mapper can find it. |
-| **Masking leaves characters** | Fixed in v2.2. The system now correctly handles `visible_suffix_length: 0`. |
+| **Hindi text not redacted** | Ensure `X-Language: hi` header is sent. Verify `logistics_hindi` or `demo_all` domain is active. |
+| **"Safe" city redacted** | Check if `X-Target` is set to `storage`. Switch to `user` to allow safe terms. |
+| **False Positives** | The `demo_all` domain is aggressive. For production, use a specific domain like `logistics`. |
 
 ```
 
