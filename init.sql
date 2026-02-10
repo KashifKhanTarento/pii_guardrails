@@ -8,21 +8,20 @@ CREATE TABLE IF NOT EXISTS domain_policies (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 2. Create the Audit Store (NEW for v0.2.3)
--- This satisfies the "Evidence" requirement for RTI/Governance
+-- 2. Create the Audit Store
 CREATE TABLE IF NOT EXISTS audit_logs (
     id SERIAL PRIMARY KEY,
     trace_id UUID NOT NULL,
     tenant_id VARCHAR(50),
     domain_id VARCHAR(50),
-    target_context VARCHAR(20), -- 'user' or 'storage'
+    target_context VARCHAR(20),
     pii_count INT,
     processing_ms INT,
     trace_json JSONB NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- 3. SEED DATA (Existing Domains)
+-- 3. SEED DATA
 
 -- (A) EDUCATION DOMAIN
 INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
@@ -111,7 +110,7 @@ INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
     }'
 ) ON CONFLICT (domain_id) DO NOTHING;
 
--- (G) LOGISTICS / ADDRESS DOMAIN [UPDATED to v0.2.2]
+-- (G) LOGISTICS / ADDRESS DOMAIN
 INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
     'logistics', FALSE,
     '{
@@ -119,9 +118,45 @@ INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
         "rules": [
             { "entity_type": "PIN_CODE", "action": "REDACT_TAG", "config": {"tag_label": "[PIN]"} },
             { "entity_type": "HOUSE_NUMBER", "action": "MASK", "config": {"visible_suffix_length": 0} },
-            { "entity_type": "LOCATION", "action": "REDACT_TAG", "config": {"tag_label": "[REDACTED]"} },
+            { "entity_type": "LOCATION", "action": "REDACT_TAG", "config": {"tag_label": "[LOC]"} },
             { "entity_type": "PHONE", "action": "HASH", "config": {} }
         ]
     }'
+) ON CONFLICT (domain_id) DO UPDATE SET is_active = FALSE;
+
+-- (H) HINDI LOGISTICS
+INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
+    'logistics_hindi', TRUE,
+    '{
+        "meta": {"version": "1.0", "description": "Hindi Address Logistics"},
+        "rules": [
+            { "entity_type": "PIN_CODE", "action": "REDACT_TAG", "config": {"tag_label": "[पिन कोड]"} },
+            { "entity_type": "HOUSE_NUMBER", "action": "REDACT_TAG", "config": {"tag_label": "[घर नंबर]"} },
+            { "entity_type": "LOCATION", "action": "REDACT_TAG", "config": {"tag_label": "[स्थान]"} },
+            { "entity_type": "PHONE", "action": "HASH", "config": {} }
+        ]
+    }'
+) ON CONFLICT (domain_id) DO NOTHING;
+
+-- (I) DEMO ALL: The "Super Domain" showcasing all capabilities
+INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
+    'demo_all', TRUE,
+    '{
+        "meta": {"version": "2.0", "description": "Full Spectrum Capabilities Demo"},
+        "rules": [
+            { "entity_type": "LOCATION", "action": "REDACT_TAG", "config": {"tag_label": "[LOC]"} },
+            { "entity_type": "PERSON", "action": "REDACT_TAG", "config": {"tag_label": "[NAME]"} },
+            { "entity_type": "AGE", "action": "REDACT_TAG", "config": {"tag_label": "[AGE]"} },
+            { "entity_type": "GENDER", "action": "REDACT_TAG", "config": {"tag_label": "[GENDER]"} },
+            { "entity_type": "OCCUPATION", "action": "REDACT_TAG", "config": {"tag_label": "[ROLE]"} },
+            { "entity_type": "AADHAAR_UID", "action": "MASK", "config": {"visible_suffix_length": 4} },
+            { "entity_type": "PAN_CARD", "action": "MASK", "config": {"visible_suffix_length": 2} },
+            { "entity_type": "PHONE", "action": "HASH", "config": {} },
+            { "entity_type": "EMAIL", "action": "MASK", "config": {"visible_prefix_length": 3}, "custom_regex": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b" },
+            { "entity_type": "CREDIT_CARD", "action": "REDACT_TAG", "config": {"tag_label": "[PCI-DSS]"}, "custom_regex": "\\b(?:\\d[ -]*?){13,16}\\b" },
+            { "entity_type": "HOUSE_NUMBER", "action": "REDACT_TAG", "config": {"tag_label": "[HOUSE]"} },
+            { "entity_type": "PIN_CODE", "action": "REDACT_TAG", "config": {"tag_label": "[PIN]"} }
+        ]
+    }'
 ) ON CONFLICT (domain_id) DO UPDATE 
-SET policy_json = EXCLUDED.policy_json;
+SET is_active = TRUE, policy_json = EXCLUDED.policy_json;

@@ -195,10 +195,16 @@
     async function runRedaction() {
         const text = document.getElementById('inputText').value;
         const domain = document.getElementById('domainSelect').value;
-        const target = document.getElementById('targetSelect').value; // GET TARGET
+        const target = document.getElementById('targetSelect').value; 
         const showTrace = document.getElementById('traceToggle').checked;
         
         if (!domain) return alert("Activate a domain first.");
+
+        // --- NEW: AUTO-DETECT LANGUAGE BASED ON DOMAIN NAME ---
+        let lang = 'en';
+        if (domain.includes('hindi') || domain.includes('_hi')) {
+            lang = 'hi';
+        }
         
         document.getElementById('outputText').innerText = "Processing...";
         if(showTrace) {
@@ -209,11 +215,12 @@
         try {
             const res = await fetch('/redact', {
                 method: 'POST',
-                // SEND HEADERS: Includes X-Target for Context Awareness
+                // SEND HEADERS: Includes X-Target and X-Language
                 headers: {
                     'Content-Type': 'application/json', 
                     'X-Tenant-ID': 'bhashini-demo',
-                    'X-Target': target 
+                    'X-Target': target,
+                    'X-Language': lang  // <--- This switches the brain
                 },
                 body: JSON.stringify({text, domain})
             });
@@ -228,7 +235,6 @@
             document.getElementById('outputText').innerText = data.redacted_text;
             document.getElementById('latencyBadge').innerText = `⚡ ${data.metadata.processing_time_ms} ms`;
             
-            // Populate JSON log
             const jsonEl = document.getElementById('jsonOutput');
             if(jsonEl) jsonEl.innerText = JSON.stringify(data, null, 2);
 

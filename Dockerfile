@@ -1,21 +1,20 @@
-# Switching to the full image to speed up AI library installation
+# [File: Dockerfile]
 FROM python:3.9
 
-# Set working directory
 WORKDIR /app
 
-# Install system dependencies (Full image already has gcc/g++)
+# Install system dependencies
 RUN apt-get update && apt-get install -y libpq-dev && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download the AI Model
+# --- BRAIN TRANSPLANT: Install English (Large) & Multi-lang (Small) ---
+# 'en_core_web_lg' gives best accuracy for English
+# 'xx_ent_wiki_sm' is the standard for Hindi/Multi-lang NER
 RUN python -m spacy download en_core_web_lg
+RUN python -m spacy download xx_ent_wiki_sm
 
-# Copy application code
 COPY . .
-
-# Command to run the app
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
