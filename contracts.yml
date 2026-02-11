@@ -1,0 +1,179 @@
+openapi: 3.0.3
+info:
+  title: AI4I PII Guardrail API
+  description: Multi-lingual PII detection engine with trace observability and admin orchestration.
+  version: 3.0.0
+
+servers:
+  - url: http://localhost:8000
+    description: Local Development Server
+
+paths:
+  # --- CORE GUARDRAIL ENDPOINT ---
+  /redact:
+    post:
+      summary: Redact PII from unstructured text
+      tags: [Guardrail]
+      parameters:
+        - $ref: '#/components/parameters/X-Language'
+        - $ref: '#/components/parameters/X-Target'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RedactionRequest'
+      responses:
+        '200':
+          description: Successful redaction
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RedactionResponse'
+        '500':
+          description: Fail-Closed Triggered
+
+  # --- ADMIN: DOMAIN MANAGEMENT ---
+  /admin/all-domains:
+    get:
+      summary: List all available domain templates
+      tags: [Admin]
+      responses:
+        '200':
+          description: List of domains with activation status
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DomainSummary'
+
+  /admin/domain:
+    post:
+      summary: Create a new domain template
+      tags: [Admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                domain_id: { type: string }
+                description: { type: string }
+      responses:
+        '200':
+          description: Domain created successfully
+
+  /admin/deploy:
+    post:
+      summary: Update and activate a domain policy
+      tags: [Admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeployRequest'
+      responses:
+        '200':
+          description: Policy deployed and domain set to is_active=TRUE
+
+  /admin/activate-domains:
+    post:
+      summary: Bulk update activation status (Clean Slate override)
+      tags: [Admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                domain_ids: 
+                  type: array
+                  items: { type: string }
+      responses:
+        '200':
+          description: Activation state updated
+
+  # --- ADMIN: AI UTILITIES ---
+  /admin/generate-regex:
+    post:
+      summary: Use Local LLM to generate regex from examples
+      tags: [Admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                example_text: { type: string }
+      responses:
+        '200':
+          description: Generated regex pattern
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  regex: { type: string }
+
+components:
+  parameters:
+    X-Language:
+      name: X-Language
+      in: header
+      schema: { type: string, enum: [en, hi], default: en }
+    X-Target:
+      name: X-Target
+      in: header
+      schema: { type: string, enum: [user, storage], default: user }
+
+  schemas:
+    # (RedactionRequest and RedactionResponse same as previous version)
+    RedactionRequest:
+      type: object
+      required: [text, domain]
+      properties:
+        text: { type: string }
+        domain: { type: string }
+
+    RedactionResponse:
+      type: object
+      properties:
+        redacted_text: { type: string }
+        trace: 
+          type: array
+          items: { $ref: '#/components/schemas/TraceStep' }
+        metadata:
+          type: object
+          properties:
+            processing_time_ms: { type: integer }
+
+    DeployRequest:
+      type: object
+      required: [domain_id, rules]
+      properties:
+        domain_id: { type: string }
+        rules:
+          type: array
+          items:
+            type: object
+            properties:
+              entity_type: { type: string }
+              action: { type: string, enum: [REDACT_TAG, MASK, HASH] }
+              config: { type: object }
+              custom_regex: { type: string }
+
+    DomainSummary:
+      type: object
+      properties:
+        domain_id: { type: string }
+        is_active: { type: boolean }
+        description: { type: string }
+
+    TraceStep:
+      type: object
+      properties:
+        step: { type: string }
+        status: { type: string }
+        time_ms: { type: integer }
+        details: { type: string }

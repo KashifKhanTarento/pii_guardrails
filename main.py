@@ -175,12 +175,14 @@ class DetectionEngine:
     }
     GENDER_TERMS = {"male", "female", "man", "woman", "boy", "girl", "transgender"}
 
-    def __init__(self):
-        self.models = {}
-        print("🧠 Loading NLP Models...")
+    def __init__(self):  # Must be indented 4 spaces
+        self.models = {}  # Must be indented 8 spaces
+        print("🧠 Optimizing NLP Models for Speed...")
         try:
-            self.models['en'] = spacy.load("en_core_web_lg")
-            print("✅ English Model Loaded.")
+            # PRUNING: Disable components to fix the 640ms latency
+            self.models['en'] = spacy.load("en_core_web_lg", disable=["parser", "attribute_ruler", "lemmatizer", "tagger"])
+            print("✅ English NER Pipeline Optimized.")
+            
             self.models['hi'] = spacy.load("xx_ent_wiki_sm") 
             print("✅ Hindi (Multi-lang) Model Loaded.")
         except Exception as e:
