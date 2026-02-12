@@ -121,6 +121,14 @@ class DetectionEngine:
             "PHONE": re.compile(r"\b(\+91[\-\s]?)?[6-9]\d{9}\b"),
             # Matches: "टावर सी" (Tower C), "नंबर 42"
             "HOUSE_ANCHOR": re.compile(r"(?:\s|^)(मकान|घर|प्लॉट|फ्लैट|नंबर|संख्या|टावर|विला|भवन|विंग)\s?[\w\d\-/]+(?:\s|$)", re.UNICODE)
+        },
+        "mr": {
+            "AADHAAR_UID": re.compile(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"), 
+            "PAN_CARD": re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b"),
+            "PIN_CODE": re.compile(r"\b\d{3}\s?\d{3}\b"),
+            "PHONE": re.compile(r"\b(\+91[\-\s]?)?[6-9]\d{9}\b"),
+            # Matches: "इमारत" (Building), "खोली" (Room), "चाळ" (Chawl), "सदन" (House)
+            "HOUSE_ANCHOR": re.compile(r"(?:\s|^)(घर|सदन|निवास|इमारत|फ्लॅट|अपार्टमेंट|नंबर|क्रमांक|चाळ|खोली|गाळा)\s?[\w\d\-/]+(?:\s|$)", re.UNICODE)
         }
     }
 
@@ -137,6 +145,11 @@ class DetectionEngine:
             "रोड", "मार्ग", "नगर", "कॉलोनी", "चौक", "विहार", "गली", "पथ", "ब्लॉक", 
             "सेक्टर", "अपार्टमेंट", "एन्क्लेव", "मीडोज", "हाईट्स", "गार्डन", "टावर",
             "विला", "भवन", "निवास", "कुटीर", "मंजिल", "गेट", "फेज"
+        ],
+        "mr": [
+            "रोड", "मार्ग", "नगर", "कॉलनी", "चौक", "पेठ", "आळी", "वाडा", 
+            "गल्ली", "रस्ता", "पथ", "ब्लॉक", "सेक्टर", "अपार्टमेंट", "एन्क्लेव", 
+            "हाईट्स", "गार्डन", "टावर", "निवास", "संकुल", "इमारत"
         ]
     }
 
@@ -159,13 +172,20 @@ class DetectionEngine:
             "लखनऊ", "कानपुर", "नागपुर", "इंदौर", "भोपाल", "पटना", "गाजियाबाद", "आगरा", 
             "नासिक", "मेरठ", "राजकोट", "मैसूर", "हुबली", "मंगलौर", "बिहार", "गोआ", "गुजरात",
             "राजस्थान", "पंजाब", "हरियाणा", "ओडिशा", "मध्य प्रदेश", "उत्तर प्रदेश"
+        },
+        "mr": {
+            "पुणे", "मुंबई", "नागपूर", "नाशिक", "ठाणे", "संभाजीनगर", "औरंगाबाद", 
+            "सोलापूर", "कोल्हापूर", "अमरावती", "जळगाव", "अकोला", "लातूर", 
+            "धुळे", "अहमदनगर", "चंद्रपूर", "परभणी", "सांगली", "रत्नागिरी", "सिंधुदुर्ग",
+            "महाराष्ट्र", "भारत", "गोवा", "कर्नाटक", "गुजरात"
         }
     }
     
     # [LAYER 4] Context Connectors
     CONNECTORS = {
         "en": {"pre": ["at", "in", "on", "near"], "post": []},
-        "hi": {"pre": [], "post": ["में", "पर", "के पास", "स्थित"]} 
+        "hi": {"pre": [], "post": ["में", "पर", "के पास", "स्थित"]},
+        "mr": {"pre": [], "post": ["मध्ये", "वर", "जवळ", "समोर", "मागे", "शेजारी", "बाहेर"]} 
     }
     
     # [LAYER 1.5] Quasi-Identifier Lists
@@ -175,21 +195,21 @@ class DetectionEngine:
     }
     GENDER_TERMS = {"male", "female", "man", "woman", "boy", "girl", "transgender"}
 
-    def __init__(self):  # Must be indented 4 spaces
-        self.models = {}  # Must be indented 8 spaces
+    def __init__(self):  
+        self.models = {}  
         print("🧠 Optimizing NLP Models for Speed...")
         try:
-            # PRUNING: Disable components to fix the 640ms latency
             self.models['en'] = spacy.load("en_core_web_lg", disable=["parser", "attribute_ruler", "lemmatizer", "tagger"])
             print("✅ English NER Pipeline Optimized.")
             
-            self.models['hi'] = spacy.load("xx_ent_wiki_sm") 
-            print("✅ Hindi (Multi-lang) Model Loaded.")
+            multi_lang_model = spacy.load("xx_ent_wiki_sm")
+            self.models['hi'] = multi_lang_model
+            self.models['mr'] = multi_lang_model
+            print("✅ Multi-lang Model (Hindi/Marathi) Loaded.")
         except Exception as e:
             print(f"❌ Failed to load NLP Model: {e}")
 
     def detect_quasi_identifiers(self, text: str, lang: str = "en") -> List[DetectedEntity]:
-        """Detects Age, Gender, Occupation for Risk Calculation"""
         if lang != "en": return [] 
         
         quasi_ents = []
@@ -316,7 +336,6 @@ class DetectionEngine:
         # --- PHASE 4: STRICT MODE BLOCKLIST (FIXED REGEX) ---
         if strict_mode and is_loc_active:
             for term in safe_geo:
-                # [FIX 1] Use Negative Lookahead to handle punctuation (Mysore.)
                 pattern = r"(?<!\w)(" + re.escape(term) + r")(?!\w)"
                 for m in re.finditer(pattern, text, re.IGNORECASE | re.UNICODE):
                     start, end = m.start(1), m.end(1)
@@ -327,7 +346,8 @@ class DetectionEngine:
                         ))
 
         # --- PHASE 5: Specificity Chain ---
-        if is_loc_active and not strict_mode:
+        # [FIX] Run even in Strict Mode, BUT handle Safe Terms inside the function
+        if is_loc_active:
             detected = self.apply_specificity_chain(detected, ai_candidates, text, lang)
         
         trace_log.append({"step": f"AI & Context ({lang})", "status": "Success", "time_ms": int((time.time()-t1)*1000)})
@@ -336,6 +356,9 @@ class DetectionEngine:
     def apply_specificity_chain(self, anchors: List[DetectedEntity], candidates: List[DetectedEntity], text: str, lang: str) -> List[DetectedEntity]:
         final_set = anchors.copy()
         
+        # [CRITICAL FIX] Load Safe Terms to prevent "Over-Chaining"
+        safe_geo = self.SAFE_GEO_TERMS.get(lang, self.SAFE_GEO_TERMS['en'])
+
         all_items = sorted(anchors + candidates, key=lambda x: x.start_index)
         if not all_items: return final_set
 
@@ -343,6 +366,11 @@ class DetectionEngine:
 
         for i in range(len(all_items)):
             current = all_items[i]
+            
+            # [CRITICAL FIX] If the current item is SAFE (e.g., Bangalore), NEVER auto-upgrade it via chaining.
+            if current.text_segment.lower() in safe_geo:
+                continue
+
             if current.risk_score == 1.0: continue 
 
             neighbors = []
@@ -379,10 +407,13 @@ class DetectionEngine:
             while cursor < len(text):
                 match = re.match(r'^\s*(,|and)?\s*([A-Za-z]+)', text[cursor:])
                 if match:
-                    word = match.group(2).lower()
-                    if word in safe_geo: break 
-                    if word in ["and", "but", "the", "is", "at", "in"]: break
+                    # captured_word is a string, NOT an object
+                    captured_word = match.group(2).lower()
+                    
+                    if captured_word in safe_geo: break 
+                    if captured_word in ["and", "but", "the", "is", "at", "in"]: break
                     full_len = len(match.group(0))
+                    
                     if match.group(2)[0].isupper():
                         new_items.append(DetectedEntity(
                             entity_type="LOCATION", start_index=cursor, end_index=cursor+full_len, text_segment=match.group(0),
@@ -449,11 +480,30 @@ def redact_text(request: RedactionRequest, background_tasks: BackgroundTasks,
         raise HTTPException(status_code=400, detail="Invalid or Inactive Domain")
     
     try:
+        # 1. DETECT ENTITIES
         entities = detection_engine.detect(request.text, policy['rules'], trace, strict_mode=is_strict, lang=x_language)
         
+        # 2. DEDUPLICATE & RESOLVE OVERLAPS (CRITICAL FIX for [LOC][LOC] bug)
+        entities.sort(key=lambda x: x.start_index)
+        unique_ents = []
+        if entities:
+            curr = entities[0]
+            for next_ent in entities[1:]:
+                # If overlap exists
+                if next_ent.start_index < curr.end_index:
+                    # Keep the entity that covers more text
+                    if (next_ent.end_index - next_ent.start_index) > (curr.end_index - curr.start_index):
+                        curr = next_ent
+                else:
+                    unique_ents.append(curr)
+                    curr = next_ent
+            unique_ents.append(curr)
+
+        # 3. APPLY REDACTION
         t_redact = time.time()
         redacted_text = request.text
-        sorted_ents = sorted(entities, key=lambda x: x.start_index, reverse=True)
+        # Sort reverse so index replacement works
+        sorted_ents = sorted(unique_ents, key=lambda x: x.start_index, reverse=True)
         
         for entity in sorted_ents:
             rule = next((r for r in policy['rules'] if r['entity_type'] == entity.entity_type), None)
@@ -466,15 +516,10 @@ def redact_text(request: RedactionRequest, background_tasks: BackgroundTasks,
             if rule['action'] == "REDACT_TAG":
                 replacement = rule['config'].get('tag_label', f'[{entity.entity_type}]')
             elif rule['action'] == "MASK":
-                # [FIX 2] Support Custom Mask Char & Smart Email Logic
                 mask_char = rule['config'].get('mask_char', 'X')
                 
-                # Special Case for EMAIL: Keep @ and Domain if possible (and not strict)
+                # Special Case for EMAIL
                 if entity.entity_type == "EMAIL" and "@" in entity.text_segment and not is_strict:
-                    # Logic: Mask Local Part, Keep @, Keep Domain
-                    # Fallback to '*' if mask_char is 'X' to look nice
-                    mask_char = '*' if mask_char == 'X' else mask_char
-                    
                     try:
                         local, domain = entity.text_segment.split('@', 1)
                         if len(local) > 3:
@@ -485,7 +530,6 @@ def redact_text(request: RedactionRequest, background_tasks: BackgroundTasks,
                     except:
                         replacement = mask_char * len(entity.text_segment)
                 else:
-                    # Standard Masking for everything else (Credit Card, Phone, etc)
                     suffix_len = rule['config'].get('visible_suffix_length', 0)
                     prefix_len = rule['config'].get('visible_prefix_length', 0)
                     
@@ -513,20 +557,20 @@ def redact_text(request: RedactionRequest, background_tasks: BackgroundTasks,
             "step": "Policy Enforcement",
             "status": "Success",
             "time_ms": int((time.time() - t_redact) * 1000),
-            "details": f"Applied actions to {len(entities)} segments."
+            "details": f"Applied actions to {len(unique_ents)} segments."
         })
 
         processing_time_ms = int((time.time() - global_start) * 1000)
 
         background_tasks.add_task(
             audit_logger.log_event, 
-            trace_id, x_tenant_id, request.domain, x_target, len(entities), processing_time_ms, trace
+            trace_id, x_tenant_id, request.domain, x_target, len(unique_ents), processing_time_ms, trace
         )
 
         return {
             "original_text": request.text, 
             "redacted_text": redacted_text, 
-            "pii_detected": entities,
+            "pii_detected": unique_ents,
             "trace": trace,
             "metadata": {
                 "processing_time_ms": processing_time_ms,

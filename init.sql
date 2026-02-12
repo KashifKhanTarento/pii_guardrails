@@ -160,3 +160,17 @@ INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
     }'
 ) ON CONFLICT (domain_id) DO UPDATE 
 SET is_active = TRUE, policy_json = EXCLUDED.policy_json;
+
+-- (J) MARATHI LOGISTICS
+INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
+    'logistics_marathi', TRUE,
+    '{
+        "meta": {"version": "1.0", "description": "Marathi Address Logistics"},
+        "rules": [
+            { "entity_type": "PIN_CODE", "action": "REDACT_TAG", "config": {"tag_label": "[पिन कोड]"} },
+            { "entity_type": "HOUSE_ANCHOR", "action": "REDACT_TAG", "config": {"tag_label": "[घर क्रमांक]"} },
+            { "entity_type": "LOCATION", "action": "REDACT_TAG", "config": {"tag_label": "[स्थान]"} },
+            { "entity_type": "PHONE", "action": "HASH", "config": {} }
+        ]
+    }'
+) ON CONFLICT (domain_id) DO NOTHING;

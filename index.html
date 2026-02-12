@@ -204,6 +204,8 @@
         let lang = 'en';
         if (domain.includes('hindi') || domain.includes('_hi')) {
             lang = 'hi';
+        } else if (domain.includes('marathi') || domain.includes('_mr')) {
+            lang = 'mr';
         }
         
         document.getElementById('outputText').innerText = "Processing...";
