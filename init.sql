@@ -174,3 +174,17 @@ INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
         ]
     }'
 ) ON CONFLICT (domain_id) DO NOTHING;
+
+-- (K) TAMIL LOGISTICS
+INSERT INTO domain_policies (domain_id, is_active, policy_json) VALUES (
+    'logistics_tamil', TRUE,
+    '{
+        "meta": {"version": "1.0", "description": "Tamil Address Logistics"},
+        "rules": [
+            { "entity_type": "PIN_CODE", "action": "REDACT_TAG", "config": {"tag_label": "[அஞ்சல் குறியீடு]"} },
+            { "entity_type": "HOUSE_ANCHOR", "action": "REDACT_TAG", "config": {"tag_label": "[வீட்டு எண்]"} },
+            { "entity_type": "LOCATION", "action": "REDACT_TAG", "config": {"tag_label": "[முகவரி]"} },
+            { "entity_type": "PHONE", "action": "HASH", "config": {} }
+        ]
+    }'
+) ON CONFLICT (domain_id) DO NOTHING;

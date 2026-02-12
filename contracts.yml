@@ -121,7 +121,7 @@ components:
     X-Language:
       name: X-Language
       in: header
-      schema: { type: string, enum: [en, hi, mr], default: en }
+      schema: { type: string, enum: [en, hi, mr, ta], default: en }
     X-Target:
       name: X-Target
       in: header

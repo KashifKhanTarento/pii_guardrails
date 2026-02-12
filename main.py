@@ -111,7 +111,6 @@ class DetectionEngine:
             "PAN_CARD": re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b"),
             "PIN_CODE": re.compile(r"\b\d{3}\s?\d{3}\b"),
             "PHONE": re.compile(r"\b(\+91[\-\s]?)?[6-9]\d{9}\b"),
-            # Matches: "Flat 12", "Tower C", "No. 42"
             "HOUSE_ANCHOR": re.compile(r"\b(No\.|Flat|House|H\.No|Door|#|Plot|Tower|Wing|Floor|Villa|Apt)\s?[\w\d\-/]+\b", re.IGNORECASE) 
         },
         "hi": {
@@ -119,7 +118,6 @@ class DetectionEngine:
             "PAN_CARD": re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b"),
             "PIN_CODE": re.compile(r"\b\d{3}\s?\d{3}\b"),
             "PHONE": re.compile(r"\b(\+91[\-\s]?)?[6-9]\d{9}\b"),
-            # Matches: "टावर सी" (Tower C), "नंबर 42"
             "HOUSE_ANCHOR": re.compile(r"(?:\s|^)(मकान|घर|प्लॉट|फ्लैट|नंबर|संख्या|टावर|विला|भवन|विंग)\s?[\w\d\-/]+(?:\s|$)", re.UNICODE)
         },
         "mr": {
@@ -127,8 +125,16 @@ class DetectionEngine:
             "PAN_CARD": re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b"),
             "PIN_CODE": re.compile(r"\b\d{3}\s?\d{3}\b"),
             "PHONE": re.compile(r"\b(\+91[\-\s]?)?[6-9]\d{9}\b"),
-            # Matches: "इमारत" (Building), "खोली" (Room), "चाळ" (Chawl), "सदन" (House)
             "HOUSE_ANCHOR": re.compile(r"(?:\s|^)(घर|सदन|निवास|इमारत|फ्लॅट|अपार्टमेंट|नंबर|क्रमांक|चाळ|खोली|गाळा)\s?[\w\d\-/]+(?:\s|$)", re.UNICODE)
+        },
+        "ta": {
+            "AADHAAR_UID": re.compile(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}\b"), 
+            "PAN_CARD": re.compile(r"\b[A-Z]{5}[0-9]{4}[A-Z]{1}\b"),
+            "PIN_CODE": re.compile(r"\b\d{3}\s?\d{3}\b"),
+            "PHONE": re.compile(r"\b(\+91[\-\s]?)?[6-9]\d{9}\b"),
+            # Matches: Veedu (House), Veettu (House-Inflected), En (Number)
+            # [FIX 1] Added 'Veettu' and allowed punctuation [.,] after the number
+            "HOUSE_ANCHOR": re.compile(r"(?:\s|^)(வீடு|வீட்டு|எண்|மனை|தளம்|கதவு|பிளாட்|டவர்|வில்லா)\s?[\w\d\-/]+(?:\s|[.,]|$)", re.UNICODE)
         }
     }
 
@@ -150,6 +156,10 @@ class DetectionEngine:
             "रोड", "मार्ग", "नगर", "कॉलनी", "चौक", "पेठ", "आळी", "वाडा", 
             "गल्ली", "रस्ता", "पथ", "ब्लॉक", "सेक्टर", "अपार्टमेंट", "एन्क्लेव", 
             "हाईट्स", "गार्डन", "टावर", "निवास", "संकुल", "इमारत"
+        ],
+        "ta": [
+            "சாலை", "தெரு", "நகர்", "சந்து", "குறுக்கு", "பாதை", "மாளிகை", 
+            "காலனி", "அபார்ட்மெண்ட்", "வளாகம்", "கார்டன்", "பூங்கா", "நகரம்"
         ]
     }
 
@@ -178,6 +188,12 @@ class DetectionEngine:
             "सोलापूर", "कोल्हापूर", "अमरावती", "जळगाव", "अकोला", "लातूर", 
             "धुळे", "अहमदनगर", "चंद्रपूर", "परभणी", "सांगली", "रत्नागिरी", "सिंधुदुर्ग",
             "महाराष्ट्र", "भारत", "गोवा", "कर्नाटक", "गुजरात"
+        },
+        "ta": {
+            "சென்னை", "மதுரை", "கோயம்புத்தூர்", "சேலம்", "திருச்சிராப்பள்ளி", 
+            "திருநெல்வேலி", "திருப்பூர்", "ஈரோடு", "வேலூர்", "தூத்துக்குடி", 
+            "நாகர்கோவில்", "தஞ்சாவூர்", "திண்டுக்கல்", "தமிழ்நாடு", "இந்தியா", 
+            "கர்நாடகா", "கேரளா", "மும்பை", "டெல்லி", "பெங்களூரு"
         }
     }
     
@@ -185,7 +201,8 @@ class DetectionEngine:
     CONNECTORS = {
         "en": {"pre": ["at", "in", "on", "near"], "post": []},
         "hi": {"pre": [], "post": ["में", "पर", "के पास", "स्थित"]},
-        "mr": {"pre": [], "post": ["मध्ये", "वर", "जवळ", "समोर", "मागे", "शेजारी", "बाहेर"]} 
+        "mr": {"pre": [], "post": ["मध्ये", "वर", "जवळ", "समोर", "मागे", "शेजारी", "बाहेर"]},
+        "ta": {"pre": [], "post": ["இல்", "இடம்", "அருகில்", "எதிரில்", "மேல்"]} 
     }
     
     # [LAYER 1.5] Quasi-Identifier Lists
@@ -205,7 +222,8 @@ class DetectionEngine:
             multi_lang_model = spacy.load("xx_ent_wiki_sm")
             self.models['hi'] = multi_lang_model
             self.models['mr'] = multi_lang_model
-            print("✅ Multi-lang Model (Hindi/Marathi) Loaded.")
+            self.models['ta'] = multi_lang_model
+            print("✅ Multi-lang Model (Hindi/Marathi/Tamil) Loaded.")
         except Exception as e:
             print(f"❌ Failed to load NLP Model: {e}")
 
@@ -346,7 +364,6 @@ class DetectionEngine:
                         ))
 
         # --- PHASE 5: Specificity Chain ---
-        # [FIX] Run even in Strict Mode, BUT handle Safe Terms inside the function
         if is_loc_active:
             detected = self.apply_specificity_chain(detected, ai_candidates, text, lang)
         
@@ -356,7 +373,6 @@ class DetectionEngine:
     def apply_specificity_chain(self, anchors: List[DetectedEntity], candidates: List[DetectedEntity], text: str, lang: str) -> List[DetectedEntity]:
         final_set = anchors.copy()
         
-        # [CRITICAL FIX] Load Safe Terms to prevent "Over-Chaining"
         safe_geo = self.SAFE_GEO_TERMS.get(lang, self.SAFE_GEO_TERMS['en'])
 
         all_items = sorted(anchors + candidates, key=lambda x: x.start_index)
@@ -367,7 +383,6 @@ class DetectionEngine:
         for i in range(len(all_items)):
             current = all_items[i]
             
-            # [CRITICAL FIX] If the current item is SAFE (e.g., Bangalore), NEVER auto-upgrade it via chaining.
             if current.text_segment.lower() in safe_geo:
                 continue
 
@@ -405,16 +420,20 @@ class DetectionEngine:
         for ent in locs:
             cursor = ent.end_index
             while cursor < len(text):
-                match = re.match(r'^\s*(,|and)?\s*([A-Za-z]+)', text[cursor:])
+                # [FIX 2] Use \w+ (Unicode word) instead of [A-Za-z] to support Tamil/Hindi script
+                match = re.match(r'^\s*(,|and)?\s*(\w+)', text[cursor:], re.UNICODE)
                 if match:
-                    # captured_word is a string, NOT an object
                     captured_word = match.group(2).lower()
-                    
                     if captured_word in safe_geo: break 
                     if captured_word in ["and", "but", "the", "is", "at", "in"]: break
                     full_len = len(match.group(0))
                     
-                    if match.group(2)[0].isupper():
+                    # [FIX 3] Only check isupper() for English. For others, trust the chain.
+                    should_add = True
+                    if lang == "en" and not match.group(2)[0].isupper():
+                        should_add = False
+                    
+                    if should_add:
                         new_items.append(DetectedEntity(
                             entity_type="LOCATION", start_index=cursor, end_index=cursor+full_len, text_segment=match.group(0),
                             detection_source="CHAIN: Domino", risk_score=1.0
@@ -483,7 +502,7 @@ def redact_text(request: RedactionRequest, background_tasks: BackgroundTasks,
         # 1. DETECT ENTITIES
         entities = detection_engine.detect(request.text, policy['rules'], trace, strict_mode=is_strict, lang=x_language)
         
-        # 2. DEDUPLICATE & RESOLVE OVERLAPS (CRITICAL FIX for [LOC][LOC] bug)
+        # 2. DEDUPLICATE & RESOLVE OVERLAPS (CRITICAL FIX)
         entities.sort(key=lambda x: x.start_index)
         unique_ents = []
         if entities:
@@ -517,8 +536,6 @@ def redact_text(request: RedactionRequest, background_tasks: BackgroundTasks,
                 replacement = rule['config'].get('tag_label', f'[{entity.entity_type}]')
             elif rule['action'] == "MASK":
                 mask_char = rule['config'].get('mask_char', 'X')
-                
-                # Special Case for EMAIL
                 if entity.entity_type == "EMAIL" and "@" in entity.text_segment and not is_strict:
                     try:
                         local, domain = entity.text_segment.split('@', 1)
@@ -541,10 +558,7 @@ def redact_text(request: RedactionRequest, background_tasks: BackgroundTasks,
                     raw_len = len(raw)
                     
                     if (prefix_len + suffix_len) < raw_len:
-                        start_part = raw[:prefix_len]
-                        end_part = raw[raw_len-suffix_len:] if suffix_len > 0 else ""
-                        masked_part = mask_char * (raw_len - prefix_len - suffix_len)
-                        replacement = start_part + masked_part + end_part
+                        replacement = raw[:prefix_len] + (mask_char * (raw_len - prefix_len - suffix_len)) + (raw[raw_len-suffix_len:] if suffix_len > 0 else "")
                     else:
                         replacement = mask_char * raw_len
 
